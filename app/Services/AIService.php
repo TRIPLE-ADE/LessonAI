@@ -7,12 +7,13 @@ use Illuminate\Support\Facades\Log;
 
 class AIService
 {
-    private $apiKey;
-    private $baseUrl = 'https://api.openai.com/v1';
+    protected string $baseUrl;
+    protected string $apiKey;
 
     public function __construct()
     {
-        $this->apiKey = config('services.openai.api_key');
+        $this->baseUrl = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
+        $this->apiKey = env('GEMINI_API_KEY');
     }
 
     /**
@@ -22,36 +23,36 @@ class AIService
     {
         try {
             $prompt = $this->buildPrompt($lesson, $question);
-            
-            $response = Http::withHeaders([
-                'Authorization' => 'Bearer ' . $this->apiKey,
+            Log::info('AI Prompt', ['prompt' => $prompt]);
+
+             $response = Http::withOptions([
+                'verify' => false, 
+                'timeout' => 30,
+    
+            ])->withHeaders([
                 'Content-Type' => 'application/json',
-            ])->post($this->baseUrl . '/chat/completions', [
-                'model' => 'gpt-3.5-turbo',
-                'messages' => [
+            ])->post($this->baseUrl . '?key=' . $this->apiKey, [
+                'contents' => [
                     [
-                        'role' => 'system',
-                        'content' => 'You are a helpful educational assistant. Answer questions based only on the provided lesson content. Be clear, educational, and encouraging.'
-                    ],
-                    [
-                        'role' => 'user',
-                        'content' => $prompt
+                        'parts' => [
+                            ['text' => $prompt]
+                        ]
                     ]
-                ],
-                'max_tokens' => 500,
-                'temperature' => 0.7,
+                ]
             ]);
 
             if ($response->successful()) {
-                return $response->json('choices.0.message.content');
+                Log::info('AI Response', ['response' => $response->body()]);
+                // Gemini returns candidates[0].content.parts[0].text
+                return $response->json('candidates.0.content.parts.0.text');
             }
 
-            Log::error('OpenAI API Error', ['response' => $response->body()]);
+            Log::error('Gemini API Error', ['response' => $response->body()]);
             return 'I apologize, but I cannot process your question right now. Please try again later.';
 
         } catch (\Exception $e) {
             Log::error('AI Service Error', ['error' => $e->getMessage()]);
-            return 'An error occurred while processing your question. Please try again.';
+            return 'An error occurred while processing your question. Please try again.' . $e->getMessage();
         }
     }
 
@@ -61,12 +62,7 @@ class AIService
     public function recommendLessons($currentLesson, $question, $allLessons)
     {
         try {
-            $prompt = "Based on this lesson: '{$currentLesson->title}' and student question: '{$question}', 
-                      which of these lessons would be most helpful for further learning? 
-                      Return only lesson IDs as a comma-separated list.
-                      
-                      Available lessons:";
-            
+            $prompt = "Based on this lesson: '{$currentLesson->title}' and student question: '{$question}', which of these lessons would be most helpful for further learning? Return only lesson IDs as a comma-separated list.\n\nAvailable lessons:";
             foreach ($allLessons as $lesson) {
                 if ($lesson->id !== $currentLesson->id) {
                     $prompt .= "\nID: {$lesson->id}, Title: {$lesson->title}";
@@ -74,26 +70,19 @@ class AIService
             }
 
             $response = Http::withHeaders([
-                'Authorization' => 'Bearer ' . $this->apiKey,
                 'Content-Type' => 'application/json',
-            ])->post($this->baseUrl . '/chat/completions', [
-                'model' => 'gpt-3.5-turbo',
-                'messages' => [
+            ])->post($this->baseUrl . '?key=' . $this->apiKey, [
+                'contents' => [
                     [
-                        'role' => 'system',
-                        'content' => 'You are an educational content recommender. Return only lesson IDs as comma-separated numbers.'
-                    ],
-                    [
-                        'role' => 'user',
-                        'content' => $prompt
+                        'parts' => [
+                            ['text' => $prompt]
+                        ]
                     ]
-                ],
-                'max_tokens' => 100,
-                'temperature' => 0.3,
+                ]
             ]);
 
             if ($response->successful()) {
-                $recommendedIds = $response->json('choices.0.message.content');
+                $recommendedIds = $response->json('candidates.0.content.parts.0.text');
                 return $this->parseRecommendedIds($recommendedIds, $allLessons);
             }
 
@@ -137,27 +126,22 @@ class AIService
     public function summarizeLesson($lesson)
     {
         try {
+            $prompt = "Summarize the following lesson in 2-3 sentences, highlighting the key learning points:\n\n" . $lesson->content;
+
             $response = Http::withHeaders([
-                'Authorization' => 'Bearer ' . $this->apiKey,
                 'Content-Type' => 'application/json',
-            ])->post($this->baseUrl . '/chat/completions', [
-                'model' => 'gpt-3.5-turbo',
-                'messages' => [
+            ])->post($this->baseUrl . '?key=' . $this->apiKey, [
+                'contents' => [
                     [
-                        'role' => 'system',
-                        'content' => 'Summarize the following lesson in 2-3 sentences, highlighting the key learning points.'
-                    ],
-                    [
-                        'role' => 'user',
-                        'content' => $lesson->content
+                        'parts' => [
+                            ['text' => $prompt]
+                        ]
                     ]
-                ],
-                'max_tokens' => 150,
-                'temperature' => 0.5,
+                ]
             ]);
 
             if ($response->successful()) {
-                return $response->json('choices.0.message.content');
+                return $response->json('candidates.0.content.parts.0.text');
             }
 
             return 'Summary not available.';
